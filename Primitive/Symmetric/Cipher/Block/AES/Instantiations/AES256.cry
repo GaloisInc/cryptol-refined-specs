@@ -1,0 +1,5 @@
+/**
+Instantiation of `AesVerif::Parameterized` with a key size of 256.
+*/
+module Primitive::Symmetric::Cipher::Block::AES::Instantiations::AES256 = Primitive::Symmetric::Cipher::Block::AES::RefinedSpecification where
+  type KeySize = 256
