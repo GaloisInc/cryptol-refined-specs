@@ -1,0 +1,34 @@
+Aes128 <- cryptol_load "../Instantiations/AES128.cry";
+KeySchedule128 <- cryptol_load "../Instantiations/KeySchedule/KeySchedule128.cry";
+
+import Primitive::Symmetric::Cipher::Block::AES::Verification::Common;
+
+// Spec for fixslice::bitslice, as used in aes128_key_schedule.
+let bitslice_key_128_spec = do {
+  rkeys_init <- mir_fresh_cryptol_var "rkeys_init" {| Aes128::FSRoundKeys |};
+  rkeys_ref <- mir_ref_of_mut (mir_term rkeys_init);
+  key <- mir_fresh_cryptol_var "key" {| Aes128::KeyBytes |};
+  key_ref <- mir_ref_of (mir_term key);
+  mir_execute_func [
+    mir_slice_range_value rkeys_ref 0 8,
+    mir_slice_value key_ref,
+    mir_slice_value key_ref,
+    mir_slice_value key_ref,
+    mir_slice_value key_ref
+  ];
+  mir_points_to rkeys_ref (mir_term {{
+    bitslice [key, key, key, key] # drop`{8} rkeys_init
+  }});
+};
+
+bitslice_key_128_ov <-
+  mir_verify m "aes::soft::fixslice::bitslice" [] false
+    bitslice_key_128_spec rme;
+
+// Verify AES-128, keeping SBox uninterpreted when verifying
+// aes128_key_schedule. If SBox is expanded, it runs for a very long time
+// (longer than verifying aes192_key_schedule with SBox expanded, for some
+// reason).
+verify_aes_size Aes128 KeySchedule128
+  [bitslice_key_128_ov]
+  (unint_z3 ["SBox"]);

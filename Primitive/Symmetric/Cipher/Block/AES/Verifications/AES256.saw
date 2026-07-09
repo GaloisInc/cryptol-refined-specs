@@ -1,0 +1,57 @@
+
+Aes256 <- cryptol_load "AesVerif/Aes256.cry";
+KeySchedule256 <- cryptol_load "AesVerif/KeySchedule256.cry";
+
+// Spec for fixslice::bitslice, as used in the first call in
+// aes256_key_schedule.
+let bitslice_key_256_front_spec = do {
+  rkeys_init <- mir_fresh_cryptol_var "rkeys_init" {| Aes256::FSRoundKeys |};
+  rkeys_ref <- mir_ref_of_mut (mir_term rkeys_init);
+  key <- mir_fresh_cryptol_var "key" {| Aes256::KeyBytes |};
+  key_ref <- mir_ref_of (mir_term key);
+  mir_execute_func [
+    mir_slice_range_value rkeys_ref 0 8,
+    mir_slice_range_value key_ref 0 16,
+    mir_slice_range_value key_ref 0 16,
+    mir_slice_range_value key_ref 0 16,
+    mir_slice_range_value key_ref 0 16
+  ];
+  mir_points_to rkeys_ref (mir_term {{
+    bitslice [take key, take key, take key, take key] # drop`{8} rkeys_init
+  }});
+};
+
+bitslice_key_256_front_ov <-
+  mir_verify m "aes::soft::fixslice::bitslice" [] false
+    bitslice_key_256_front_spec rme;
+
+// Spec for fixslice::bitslice, as used in the second call in
+// aes256_key_schedule.
+let bitslice_key_256_back_spec = do {
+  rkeys_init <- mir_fresh_cryptol_var "rkeys_init" {| Aes256::FSRoundKeys |};
+  rkeys_ref <- mir_ref_of_mut (mir_term rkeys_init);
+  key <- mir_fresh_cryptol_var "key" {| Aes256::KeyBytes |};
+  key_ref <- mir_ref_of (mir_term key);
+  mir_execute_func [
+    mir_slice_range_value rkeys_ref 8 16,
+    mir_slice_range_value key_ref 16 32,
+    mir_slice_range_value key_ref 16 32,
+    mir_slice_range_value key_ref 16 32,
+    mir_slice_range_value key_ref 16 32
+  ];
+  mir_points_to rkeys_ref (mir_term {{
+      take`{8} rkeys_init
+      # bitslice [drop key, drop key, drop key, drop key]
+      # drop`{16} rkeys_init
+  }});
+};
+
+bitslice_key_256_back_ov <-
+  mir_verify m "aes::soft::fixslice::bitslice" [] false
+    bitslice_key_256_back_spec rme;
+
+// Verify AES-256. For some reason keeping SBox uninterpreted doesn't work for
+// the aes256_key_schedule proof, so we use regular z3.
+verify_aes_size Aes256 KeySchedule256
+  [bitslice_key_256_front_ov, bitslice_key_256_back_ov]
+  z3;

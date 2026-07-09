@@ -5,7 +5,7 @@
    www.cryptol.net
 */
 
-module Primitive::Keyless::Hash::SHA2::Instantiations::SHA384 = Primitive::Keyless::Hash::SHA2::Specification where
+module Primitive::Keyless::Hash::SHA2::Instantiations::SHA384 = Primitive::Keyless::Hash::SHA2::RefinedSpecification where
 
 type wp = 64
 

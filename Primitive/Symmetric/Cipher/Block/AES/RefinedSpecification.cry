@@ -25,7 +25,7 @@ like normal Cryptol functions.
 */
 module Primitive::Symmetric::Cipher::Block::AES::RefinedSpecification where
 
-import Primitive::Symmetric::Cipher::Block::AES::Utils::Bitslice
+import Primitive::Symmetric::Cipher::Block::AES::Utils::BitSlice
 
 // This module takes the same parameter as the `cryptol-specs` spec, with the
 // same constraints, but since the `cryptol-specs` spec uses an anonymous

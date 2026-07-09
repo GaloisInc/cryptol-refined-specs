@@ -1,0 +1,866 @@
+// Verification of encrypt and decrypt using the Rust aes crate against the
+// cryptol-specs specification, for all three key sizes of AES.
+
+enable_experimental;
+
+include_once "../../../../../../Common/TypeEnum.saw";
+
+import Primitive::Symmetric::Cipher::Block::AES::Utils::BitSlice;
+import Primitive::Symmetric::Cipher::Block::AES::Utils::Proof;
+
+// The Cryptol modules for specific sizes of AES will be abstracted over as
+// `CryptolModule`s in this script, so we need to import them with cryptol_load.
+
+
+// Note: platform-specific path to the mir-json output. You will have to change
+// this if not running on Mac.
+m <- mir_load_module
+  "../target/aes_verif.linked-mir.json";
+
+// Rust types used by functions in the aes crate.
+let U = typenum_uint m;
+let GenericArray = mir_find_adt m "generic_array::GenericArray";
+let Block = GenericArray [mir_u8, mir_adt (U 16)];
+let BatchBlocks = GenericArray [mir_adt Block, mir_adt (U 4)];
+
+// Spec for fixslice::bitslice, as used in aes{128,192,256}_{encrypt,decrypt}.
+let bitslice_cipher_spec = do {
+  output_init <- mir_fresh_cryptol_var "output_init" {| FSState |};
+  output_ref <- mir_ref_of_mut (mir_term output_init);
+  block0 <- mir_fresh_cryptol_var "block0" {| BlockBytes |};
+  block1 <- mir_fresh_cryptol_var "block1" {| BlockBytes |};
+  block2 <- mir_fresh_cryptol_var "block2" {| BlockBytes |};
+  block3 <- mir_fresh_cryptol_var "block3" {| BlockBytes |};
+  blocks_ref <- mir_ref_of (mir_array_value (mir_adt Block) [
+    mir_struct_value Block [mir_term block0],
+    mir_struct_value Block [mir_term block1],
+    mir_struct_value Block [mir_term block2],
+    mir_struct_value Block [mir_term block3]
+  ]);
+  mir_execute_func [
+    mir_slice_value output_ref,
+    mir_slice_value (mir_field_ref (mir_elem_ref blocks_ref 0) "data"),
+    mir_slice_value (mir_field_ref (mir_elem_ref blocks_ref 1) "data"),
+    mir_slice_value (mir_field_ref (mir_elem_ref blocks_ref 2) "data"),
+    mir_slice_value (mir_field_ref (mir_elem_ref blocks_ref 3) "data")
+  ];
+  mir_points_to output_ref (mir_term {{
+    bitslice [block0, block1, block2, block3]
+  }});
+};
+
+bitslice_cipher_ov <-
+  mir_verify m "aes::soft::fixslice::bitslice" [] false
+    bitslice_cipher_spec rme;
+
+// Spec for fixslice::inv_bitslice.
+let inv_bitslice_spec = do {
+  input <- mir_fresh_cryptol_var "input" {| FSState |};
+  input_ref <- mir_ref_of (mir_term input);
+  mir_execute_func [mir_slice_value input_ref];
+  let output = {{ inv_bitslice input }};
+  mir_return (mir_struct_value BatchBlocks [
+    mir_array_value (mir_adt Block) [
+      mir_struct_value Block [mir_term {{ output @ 0 }}],
+      mir_struct_value Block [mir_term {{ output @ 1 }}],
+      mir_struct_value Block [mir_term {{ output @ 2 }}],
+      mir_struct_value Block [mir_term {{ output @ 3 }}]
+    ]
+  ]);
+};
+
+inv_bitslice_ov <-
+  mir_verify m "aes::soft::fixslice::inv_bitslice" [] false
+    inv_bitslice_spec rme;
+
+// Rewrite rule to cancel out inv_bitslice of bitslice.
+thm_inv_bitslice_bitslice <-
+  prove_print rme {{ \x -> inv_bitslice (bitslice x) == x }};
+
+// Rewrite rule to merge nested seqMap calls.
+thm_seqMap_composition <- prove_print
+  do {
+    // Turn the Cryptol::seqMap calls into Prelude::map calls, then use the
+    // Prelude::map_map axiom to merge them.
+    simplify (add_core_thms ["map_map"] (cryptol_ss ()));
+
+    // Turn the projections on Eq dictionaries into direct calls to vecEq and
+    // bvEq.
+    goal_normalize ["vecEq", "Prelude::map"];
+
+    // Complete the proof with the vecEq_refl axiom. Unfortunately goal_apply
+    // doesn't seem to work for this, so I had to use goal_exact with the raw
+    // SAWCore term.
+    goal_exact (parse_core
+      "\\(f g : Vec 16 (Vec 8 Bool) -> Vec 16 (Vec 8 Bool)) (blocks : Vec 4 (Vec 16 (Vec 8 Bool))) -> vecEq_refl 4 (Vec 16 (Vec 8 Bool)) (vecEq 16 (Vec 8 Bool) (bvEq 8)) (vecEq_refl 16 (Vec 8 Bool) (bvEq 8) (bvEq_refl 8)) (Prelude::map (Vec 16 (Vec 8 Bool)) (Vec 16 (Vec 8 Bool)) (\\(x : Vec 16 (Vec 8 Bool)) -> f (g x)) 4 blocks)"
+    );
+  }
+  {{
+    \(f : BlockBytes -> BlockBytes)
+     (g : BlockBytes -> BlockBytes)
+     (blocks : BatchBlockBytes) ->
+      [f y | y <- [g x | x <- blocks]] == [f (g x) | x <- blocks]
+  }};
+
+// Spec for functions which take a State by mutable reference and mutate it
+// according to the given Cryptol function.
+let mutate_state_ref_spec (cry_fun : Term /* FSState -> FSState */) = do {
+  state_init <- mir_fresh_cryptol_var "state_init" {| FSState |};
+  state_ref <- mir_ref_of_mut (mir_term state_init);
+  mir_execute_func [state_ref];
+  mir_points_to state_ref (mir_term {{ cry_fun state_init }});
+};
+
+// Spec for functions which take a State as a mutable slice and mutate it
+// according to the given Cryptol function.
+let mutate_state_slice_spec (cry_fun : Term /* FSState -> FSState */) = do {
+  state_init <- mir_fresh_cryptol_var "state_init" {| FSState |};
+  state_ref <- mir_ref_of_mut (mir_term state_init);
+  mir_execute_func [mir_slice_value state_ref];
+  mir_points_to state_ref (mir_term {{ cry_fun state_init }});
+};
+
+// Given a reference to an array of bitsliced round keys, return a slice of the
+// round key for the given round (starting from 0).
+let slice_round (round : Int) (arr_ref : MIRValue) : MIRValue =
+  mir_slice_range_value arr_ref
+    (eval_size {| round * 8 |})
+    (eval_size {| (round + 1) * 8 |});
+
+// Verification steps which need to be performed for each key size. This
+// function will be called on the Aes{128,192,256} and KeySchedule{128,192,256}
+// modules for each key size. There are some steps that are different between
+// the key sizes; these parts are defined by the caller for each size and passed
+// in as additional arguments.
+let verify_aes_size
+    // The Aes{128,192,256} module for this key size.
+    (Aes : CryptolModule)
+    // The KeySchedule{128,192,256} module for this key size.
+    (KeySchedule : CryptolModule)
+    // The overrides for the bitslice function as used in the key schedule
+    // function.
+    (bitslice_key_ovs : [MIRSpec])
+    // The proof tactic for verifying the key schedule function.
+    (key_schedule_proof : ProofScript ())
+= do {
+
+  // Key size as a string.
+  let key_size_str = show {| Aes::Spec::KeySize |};
+
+  print (str_concat "Verifying AES-" key_size_str);
+
+  // Integers from 0 through the number of rounds, inclusive, which can be used
+  // as indices into the bitsliced round keys array with slice_round and
+  // sliceRound/modifyRound. Note that the length of this list is one more than
+  // the number of rounds.
+  rounds <- for (eval_list {{ [0..Aes::Spec::Nr] : [_][64] }}) (\i -> do {
+    return (eval_int i);
+  });
+
+  // Override for fixslice::sub_bytes, as used in
+  // aes{128,192,256}_{encrypt_decrypt} and aes192_key_schedule.
+  sub_bytes_cipher_ov <-
+    mir_verify m "aes::soft::fixslice::sub_bytes" [] false
+      (mutate_state_slice_spec {{ Aes::sub_bytes }}) rme;
+
+  // Override for fixslice::sub_bytes_nots, as used in aes192_key_schedule
+  // inside the main loop, when it is called on a slice of tmp: [u64; 8].
+  sub_bytes_nots_tmp_ov <-
+    mir_verify m "aes::soft::fixslice::sub_bytes_nots" [] false
+      (mutate_state_slice_spec {{ Aes::sub_bytes_nots }}) rme;
+
+  // Override for fixslice::shift_rows_2, as used in aes{128,256}_encrypt, and
+  // in aes{128,256}_decrypt via fixslice::inv_shift_rows_2.
+  shift_rows_2_ov <-
+    mir_verify m "aes::soft::fixslice::shift_rows_2" [] false
+      (mutate_state_slice_spec {{ Aes::shift_rows_2 }}) rme;
+
+  // Spec for functions which take a mutable slice of a round key from the
+  // bitsliced round keys array and mutate it according to the given Cryptol
+  // function.
+  let mutate_rkeys_slice_spec
+      (round : Int)
+      (cry_fun : Term /* FSState -> FSState */)
+  = do {
+    rkeys_init <- mir_fresh_cryptol_var "rkeys_init" {| Aes::FSRoundKeys |};
+    rkeys_ref <- mir_ref_of_mut (mir_term rkeys_init);
+    mir_execute_func [slice_round round rkeys_ref];
+    mir_points_to rkeys_ref (mir_term {{
+      modifyRound`{round} cry_fun rkeys_init
+    }});
+  };
+
+  // Verify a function which takes a mutable slice of a round key from the
+  // bitsliced round keys array and mutates it according to the given Cryptol
+  // function, and obtain overrides for it for all round keys in the bitsliced
+  // round key array.
+  let verify_mutate_rkeys_slice
+      (rust_fun : String)
+      (cry_fun : Term /* FSState -> FSState */)
+      : TopLevel [MIRSpec]
+  = do {
+    for rounds (\i -> do {
+      mir_verify m rust_fun [] false (mutate_rkeys_slice_spec i cry_fun) rme;
+    });
+  };
+
+  // Overrides for fixslice::sub_bytes, as used in aes{128,256}_key_schedule.
+  sub_bytes_key_ovs <-
+    verify_mutate_rkeys_slice
+      "aes::soft::fixslice::sub_bytes" {{ Aes::sub_bytes }};
+
+  // Overrides for fixslice::sub_bytes_nots, as used in
+  // aes{128,256}_key_schedule, and in aes192_key_schedule at the end.
+  sub_bytes_nots_key_ovs <-
+    verify_mutate_rkeys_slice
+      "aes::soft::fixslice::sub_bytes_nots" {{ Aes::sub_bytes_nots }};
+
+  // Overrides for fixslice::inv_shift_rows_1, as used in
+  // aes{128,192,256}_key_schedule.
+  inv_shift_rows_1_key_ovs <-
+    verify_mutate_rkeys_slice
+      "aes::soft::fixslice::inv_shift_rows_1" {{ Aes::inv_shift_rows_1 }};
+
+  // Overrides for fixslice::inv_shift_rows_2, as used in
+  // aes{128,192,256}_key_schedule.
+  inv_shift_rows_2_key_ovs <-
+    verify_mutate_rkeys_slice
+      "aes::soft::fixslice::inv_shift_rows_2" {{ Aes::inv_shift_rows_2 }};
+
+  // Overrides for fixslice::inv_shift_rows_3, as used in
+  // aes{128,192,256}_key_schedule.
+  inv_shift_rows_3_key_ovs <-
+    verify_mutate_rkeys_slice
+      "aes::soft::fixslice::inv_shift_rows_3" {{ Aes::inv_shift_rows_3 }};
+
+  // Spec for fixslice::aes{128,192,256}_key_schedule.
+  let key_schedule_spec = do {
+    key <- mir_fresh_cryptol_var "key" {| Aes::KeyBytes |};
+    key_ref <- mir_ref_of (mir_term key);
+    mir_execute_func [key_ref];
+    mir_return (mir_term {{ KeySchedule::key_schedule key }});
+  };
+
+  print "Verifying key schedule might take a while";
+  // On a M4 Mac, this takes ~1 min for AES-128, ~5 min for AES-192, and ~9 min
+  // for AES-256.
+
+  // We don't actually need all of these overrides for each size (128 and 256
+  // don't need sub_bytes_cipher_ov and sub_bytes_nots_tmp_ov, while 192 doesn't
+  // need sub_bytes_key_ovs), but it's simpler to just pass all of them.
+  key_schedule_ov <- mir_verify m
+    (str_concats ["aes::soft::fixslice::aes", key_size_str, "_key_schedule"])
+    (concat bitslice_key_ovs
+      (concat sub_bytes_key_ovs
+        (concat inv_shift_rows_1_key_ovs
+          (concat inv_shift_rows_2_key_ovs
+            (concat inv_shift_rows_3_key_ovs
+              (concat sub_bytes_nots_key_ovs
+                [sub_bytes_cipher_ov, sub_bytes_nots_tmp_ov]))))))
+    false key_schedule_spec key_schedule_proof;
+
+  // Spec for fixslice::add_round_key for the given round.
+  let add_round_key_spec (round : Int) = do {
+    state_init <- mir_fresh_cryptol_var "state_init" {| FSState |};
+    state_ref <- mir_ref_of_mut (mir_term state_init);
+    rkeys <- mir_fresh_cryptol_var "rkeys" {| Aes::FSRoundKeys |};
+    rkeys_ref <- mir_ref_of (mir_term rkeys);
+    mir_execute_func [state_ref, slice_round round rkeys_ref];
+    mir_points_to state_ref (mir_term {{
+      Aes::add_round_key state_init (sliceRound`{round} rkeys)
+    }});
+  };
+
+  // Overrides for fixslice::add_round_key for all rounds.
+  add_round_key_ovs <-
+    for rounds (\i -> do {
+      mir_verify m "aes::soft::fixslice::add_round_key" [] false
+        (add_round_key_spec i) rme;
+    });
+
+  // Given a series of Rust functions which take a State by mutable reference,
+  // verify that each one mutates the State according to the Cryptol function
+  // that it is paired with, and return overrides for all of the functions. The
+  // Rust function names do not need to be prefixed with aes::soft::fixslice::.
+  let verify_mix_columns
+      (rust_and_cry_funs : [(String, Term /* FSState -> FSState */)])
+      : TopLevel [MIRSpec]
+  = do {
+    for rust_and_cry_funs (\(rust_fun, cry_fun) -> do {
+      mir_verify m (str_concat "aes::soft::fixslice::" rust_fun) [] false
+        (mutate_state_ref_spec cry_fun) rme;
+    });
+  };
+
+  // Overrides for fixslice::mix_columns_{0,1,2,3}.
+  mix_columns_ovs <- verify_mix_columns [
+    ("mix_columns_0", {{ Aes::mix_columns_0 }}),
+    ("mix_columns_1", {{ Aes::mix_columns_1 }}),
+    ("mix_columns_2", {{ Aes::mix_columns_2 }}),
+    ("mix_columns_3", {{ Aes::mix_columns_3 }})
+  ];
+
+  // Rewrite rule to cancel out split of join.
+  thm_split_join <- prove_print z3 {{
+    \(state : Aes::Spec::State) -> split (join state) == state
+  }};
+
+  // Rewrite rule to cancel out transpose of transpose.
+  thm_transpose_transpose <- prove_print z3 {{
+    \(state : Aes::Spec::State) -> transpose (transpose state) == state
+  }};
+
+  // Rewrite rule to merge nested stateTransformation calls.
+  thm_stateTransformation_composition <- prove_print
+    do {
+      unfolding ["stateTransformation"];
+
+      // Use previously proven lemmas to simplify the goal into an equality
+      // between two identical seqs.
+      simplify (addsimps [
+        thm_seqMap_composition,
+        thm_split_join,
+        thm_transpose_transpose
+      ] empty_ss);
+
+      // Complete the proof with the vecEq_refl axiom. Unfortunately goal_apply
+      // doesn't seem to work for this, so I had to use goal_exact with the raw
+      // SAWCore term.
+      goal_exact (parse_core
+        "\\(f g : Vec 4 (Vec 4 (Vec 8 Bool)) -> Vec 4 (Vec 4 (Vec 8 Bool))) (blocks : Vec 4 (Vec 16 (Vec 8 Bool))) -> vecEq_refl 4 (Vec 16 (Vec 8 Bool)) (vecEq 16 (Vec 8 Bool) (bvEq 8)) (vecEq_refl 16 (Vec 8 Bool) (bvEq 8) (bvEq_refl 8)) (Prelude::map (Vec 16 (Vec 8 Bool)) (Vec 16 (Vec 8 Bool)) (\\(x : Vec 16 (Vec 8 Bool)) -> ecJoin (TCNum 4) (TCNum 4) (Vec 8 Bool) (ecTranspose (TCNum 4) (TCNum 4) (Vec 8 Bool) (f (g (ecTranspose (TCNum 4) (TCNum 4) (Vec 8 Bool) (ecSplit (TCNum 4) (TCNum 4) (Vec 8 Bool) x)))))) 4 blocks)"
+      );
+    }
+    {{
+      \(f : Aes::Spec::State -> Aes::Spec::State)
+       (g : Aes::Spec::State -> Aes::Spec::State)
+       (blocks : BatchBlockBytes) ->
+        Aes::stateTransformation f (Aes::stateTransformation g blocks)
+        == Aes::stateTransformation (\x -> f (g x)) blocks
+    }};
+
+  // Rewrite rules to interchange MixColumns{0,1,2,3} and SubBytesNots.
+  thms_MixColumnsN_SubBytesNots <-
+    for [
+      {{ Aes::Spec::MixColumns }},
+      {{ Aes::MixColumns1 }},
+      {{ Aes::MixColumns2 }},
+      {{ Aes::MixColumns3 }}
+    ] (\mixColumns -> do {
+      prove_print z3 {{
+        \(state : Aes::Spec::State) ->
+          mixColumns (Aes::SubBytesNots state)
+          == Aes::SubBytesNots (mixColumns state)
+      }};
+    });
+
+  // Rewrite rule to split apart stateTransformation calls involving
+  // SubBytesNots composed with MixColumns.
+  thm_stateTransformation_decomposition_SubBytesNots_MixColumns <- prove_print
+    do {
+      simplify (addsimp thm_stateTransformation_composition empty_ss);
+      unint_z3 ["SubBytesNots", "MixColumns", "SubBytes"];
+    }
+    {{
+      \(blocks : BatchBlockBytes) ->
+        Aes::stateTransformation
+          (\state ->
+            Aes::SubBytesNots
+              (Aes::Spec::MixColumns (Aes::Spec::SubBytes state)))
+          blocks
+        == Aes::stateTransformation Aes::SubBytesNots
+            (Aes::stateTransformation
+              (\state -> Aes::Spec::MixColumns (Aes::Spec::SubBytes state))
+              blocks)
+    }};
+
+  // Rewrite rule to split apart stateTransformation calls involving
+  // SubBytesNots composed with MixColumns1.
+  thm_stateTransformation_decomposition_SubBytesNots_MixColumns1 <- prove_print
+    do {
+      simplify (addsimp thm_stateTransformation_composition empty_ss);
+      unint_z3
+        ["SubBytesNots", "MixColumns", "SubBytes", "ShiftRows", "InvShiftRows"];
+    }
+    {{
+      \(blocks : BatchBlockBytes) ->
+        Aes::stateTransformation
+          (\state ->
+            Aes::SubBytesNots (Aes::MixColumns1 (Aes::Spec::SubBytes state)))
+          blocks
+        == Aes::stateTransformation
+            (\state -> Aes::SubBytesNots (Aes::Spec::InvShiftRows state))
+            (Aes::stateTransformation
+              (\state -> Aes::Spec::MixColumns
+                (Aes::Spec::ShiftRows (Aes::Spec::SubBytes state)))
+              blocks)
+    }};
+
+  // Rewrite rule to split apart stateTransformation calls involving
+  // SubBytesNots composed with MixColumns2.
+  thm_stateTransformation_decomposition_SubBytesNots_MixColumns2 <- prove_print
+    do {
+      simplify (addsimp thm_stateTransformation_composition empty_ss);
+      unint_z3
+        ["SubBytesNots", "MixColumns", "SubBytes", "ShiftRows", "InvShiftRows"];
+    }
+    {{
+      \(blocks : BatchBlockBytes) ->
+        Aes::stateTransformation
+          (\state ->
+            Aes::SubBytesNots (Aes::MixColumns2 (Aes::Spec::SubBytes state)))
+          blocks
+        == Aes::stateTransformation
+            (\state ->
+              Aes::SubBytesNots
+                (Aes::Spec::ShiftRows (Aes::Spec::ShiftRows state)))
+            (Aes::stateTransformation
+              (\state ->
+                Aes::Spec::MixColumns
+                  (Aes::Spec::ShiftRows
+                    (Aes::Spec::ShiftRows (Aes::Spec::SubBytes state))))
+              blocks)
+    }};
+
+  // Rewrite rule to split apart stateTransformation calls involving
+  // SubBytesNots composed with MixColumns3.
+  thm_stateTransformation_decomposition_SubBytesNots_MixColumns3 <- prove_print
+    do {
+      simplify (addsimp thm_stateTransformation_composition empty_ss);
+      unint_z3
+        ["SubBytesNots", "MixColumns", "SubBytes", "ShiftRows", "InvShiftRows"];
+    }
+    {{
+      \(blocks : BatchBlockBytes) ->
+        Aes::stateTransformation
+          (\state ->
+            Aes::SubBytesNots (Aes::MixColumns3 (Aes::Spec::SubBytes state)))
+          blocks
+        == Aes::stateTransformation
+            (\state -> Aes::SubBytesNots (Aes::Spec::ShiftRows state))
+            (Aes::stateTransformation
+              (\state ->
+                Aes::Spec::MixColumns
+                  (Aes::Spec::InvShiftRows (Aes::Spec::SubBytes state)))
+              blocks)
+    }};
+
+  // Rewrite rule to split apart stateTransformation calls involving
+  // SubBytesNots composed with SubBytes and ShiftRows twice.
+  thm_stateTransformation_decomposition_SubBytesNots_SubBytes_ShiftRows2 <-
+    prove_print
+      do {
+        simplify (addsimp thm_stateTransformation_composition empty_ss);
+        unint_z3 ["SubBytesNots", "SubBytes", "ShiftRows", "InvShiftRows"];
+      }
+      {{
+        \(blocks : BatchBlockBytes) ->
+          Aes::stateTransformation
+            (\state ->
+              Aes::SubBytesNots
+                (Aes::Spec::SubBytes
+                  (Aes::Spec::ShiftRows (Aes::Spec::ShiftRows state))))
+            blocks
+          == Aes::stateTransformation Aes::SubBytesNots
+              (Aes::stateTransformation
+                (\state ->
+                  Aes::Spec::SubBytes
+                    (Aes::Spec::ShiftRows (Aes::Spec::ShiftRows state)))
+                blocks)
+      }};
+
+  // Rewrite rule to split apart stateTransformation calls involving
+  // SubBytesNots composed with SubBytes.
+  thm_stateTransformation_decomposition_SubBytesNots_SubBytes <- prove_print
+    do {
+      simplify (addsimp thm_stateTransformation_composition empty_ss);
+      unint_z3 ["SubBytesNots", "SubBytes"];
+    }
+    {{
+      \(blocks : BatchBlockBytes) ->
+        Aes::stateTransformation
+          (\state -> Aes::SubBytesNots (Aes::Spec::SubBytes state))
+          blocks
+        == Aes::stateTransformation Aes::SubBytesNots
+            (Aes::stateTransformation Aes::Spec::SubBytes blocks)
+    }};
+
+  // Rewrite rule to turn addRoundKey' of round 0 of key_schedule into
+  // AddRoundKey of round 0 of keyExpansion.
+  thm_addRoundKey'_0 <- prove_print (unint_z3 ["keyExpansion"]) {{
+    \(key : Aes::KeyBytes) (blocks : BatchBlockBytes) ->
+      Aes::addRoundKey' (sliceRound`{0} (KeySchedule::key_schedule key)) blocks
+      == Aes::stateTransformation
+          (Aes::Spec::AddRoundKey (Aes::Spec::keyExpansion (join key) @ 0))
+          blocks
+  }};
+
+  // Rewrite rules to turn addRoundKey' of a non-initial round of key_schedule
+  // and stateTransformation of SubBytesNots into stateTransformation of
+  // AddRoundKey of keyExpansion, canceling out the SubBytesNots with the
+  // sub_bytes_nots from key_schedule.
+  thms_addRoundKey'_stateTransformation_SubBytesNots <-
+    for (eval_list {{ [1..Aes::Spec::Nr] : [_][64] }}) (\i -> do {
+      let i' = eval_int i;
+      let equality =
+        if eval_bool {{ (i % 4 == 0) || (i == `Aes::Spec::Nr) }} then {{
+          \(key : Aes::KeyBytes) (blocks : BatchBlockBytes) ->
+            Aes::addRoundKey'
+              (sliceRound`{i'} (KeySchedule::key_schedule key))
+              (Aes::stateTransformation Aes::SubBytesNots blocks)
+            == Aes::stateTransformation
+                (Aes::Spec::AddRoundKey
+                  (Aes::Spec::keyExpansion (join key) @ i))
+                blocks
+        }} else if eval_bool {{ i % 4 == 1 }} then {{
+          \(key : Aes::KeyBytes) (blocks : BatchBlockBytes) ->
+            Aes::addRoundKey'
+              (sliceRound`{i'} (KeySchedule::key_schedule key))
+              (Aes::stateTransformation
+                (\state -> Aes::SubBytesNots (Aes::Spec::InvShiftRows state))
+                blocks)
+            == Aes::stateTransformation
+                (\state ->
+                  Aes::Spec::InvShiftRows
+                    (Aes::Spec::AddRoundKey
+                      (Aes::Spec::keyExpansion (join key) @ i)
+                      state))
+                blocks
+        }} else if eval_bool {{ i % 4 == 2 }} then {{
+          \(key : Aes::KeyBytes) (blocks : BatchBlockBytes) ->
+            Aes::addRoundKey'
+              (sliceRound`{i'} (KeySchedule::key_schedule key))
+              (Aes::stateTransformation
+                (\state ->
+                  Aes::SubBytesNots
+                    (Aes::Spec::ShiftRows (Aes::Spec::ShiftRows state)))
+                blocks)
+            == Aes::stateTransformation
+                (\state ->
+                  Aes::Spec::ShiftRows
+                    (Aes::Spec::ShiftRows
+                      (Aes::Spec::AddRoundKey
+                        (Aes::Spec::keyExpansion (join key) @ i)
+                        state)))
+                blocks
+        }} else /* i % 4 == 3 */ {{
+          \(key : Aes::KeyBytes) (blocks : BatchBlockBytes) ->
+            Aes::addRoundKey'
+              (sliceRound`{i'} (KeySchedule::key_schedule key))
+              (Aes::stateTransformation
+                (\state -> Aes::SubBytesNots (Aes::Spec::ShiftRows state))
+                blocks)
+            == Aes::stateTransformation
+                (\state ->
+                  Aes::Spec::ShiftRows
+                    (Aes::Spec::AddRoundKey
+                      (Aes::Spec::keyExpansion (join key) @ i)
+                      state))
+                blocks
+        }};
+      prove_print (unint_z3 ["keyExpansion"]) equality;
+    });
+
+  // Rewrite rule to interchange SubBytes and InvShiftRows.
+  thm_SubBytes_InvShiftRows <- prove_print z3 {{
+    \(state : Aes::Spec::State) ->
+      Aes::Spec::SubBytes (Aes::Spec::InvShiftRows state)
+      == Aes::Spec::InvShiftRows (Aes::Spec::SubBytes state)
+  }};
+
+  // Rewrite rule to interchange SubBytes and ShiftRows.
+  thm_SubBytes_ShiftRows <- prove_print z3 {{
+    \(state : Aes::Spec::State) ->
+      Aes::Spec::SubBytes (Aes::Spec::ShiftRows state)
+      == Aes::Spec::ShiftRows (Aes::Spec::SubBytes state)
+  }};
+
+  // Rewrite rule to cancel out ShiftRows of InvShiftRows.
+  thm_ShiftRows_InvShiftRows <- prove_print z3 {{
+    \(state : Aes::Spec::State) ->
+      Aes::Spec::ShiftRows (Aes::Spec::InvShiftRows state) == state
+  }};
+
+  // Rewrite rule to cancel out InvShiftRows of ShiftRows.
+  thm_InvShiftRows_ShiftRows <- prove_print z3 {{
+    Aes::Spec::shiftRowsInverts
+  }};
+
+  // Spec for aes_verif::encrypt{128,192,256}.
+  let encrypt_spec = do {
+    key <- mir_fresh_cryptol_var "key" {| Aes::KeyBytes |};
+    block <- mir_fresh_cryptol_var "block" {| BlockBytes |};
+    mir_execute_func [mir_term key, mir_term block];
+    mir_return (mir_term {{ Aes::encrypt key block }});
+  };
+
+  mir_verify m (str_concat "aes_verif::encrypt" key_size_str)
+    (concat add_round_key_ovs
+      (concat mix_columns_ovs [
+        key_schedule_ov,
+        bitslice_cipher_ov,
+        inv_bitslice_ov,
+        sub_bytes_cipher_ov,
+        shift_rows_2_ov
+      ]))
+    false encrypt_spec
+    do {
+      unfolding [
+        "add_round_key",
+        "sub_bytes",
+        "mix_columns_0",
+        "mix_columns_1",
+        "mix_columns_2",
+        "mix_columns_3",
+        "shift_rows_2",
+        "bitsliced"
+      ];
+
+      // Cancel out the adjacent inv_bitslice and bitslice coming from adjacent
+      // uses of bitsliced, then merge the now adjacent stateTransformations,
+      // and reorder the MixColumnsN and SubBytesNots calls.
+      simplify
+        (addsimps thms_MixColumnsN_SubBytesNots
+          (addsimps [
+            thm_inv_bitslice_bitslice,
+            thm_stateTransformation_composition
+          ] empty_ss));
+
+      // Split apart some uses of stateTransformation again, but this time with
+      // the SubBytesNots and the InvShiftRowsN in the outer stateTransformation
+      // corresponding exactly to the sub_bytes_nots and inv_shift_rows_N that
+      // key_schedule does on top of keyExpansion.
+      simplify
+        (addsimps [
+          thm_stateTransformation_decomposition_SubBytesNots_MixColumns,
+          thm_stateTransformation_decomposition_SubBytesNots_MixColumns1,
+          thm_stateTransformation_decomposition_SubBytesNots_MixColumns2,
+          thm_stateTransformation_decomposition_SubBytesNots_MixColumns3,
+          thm_stateTransformation_decomposition_SubBytesNots_SubBytes_ShiftRows2,
+          thm_stateTransformation_decomposition_SubBytesNots_SubBytes
+        ] empty_ss);
+
+      // Turn the addRoundKey' of key_schedule calls into stateTransformation of
+      // AddRoundKey' of keyExpansion, removing the outer stateTransformation
+      // generated in the previous step.
+      simplify
+        (addsimp thm_addRoundKey'_0
+          (addsimps thms_addRoundKey'_stateTransformation_SubBytesNots
+            empty_ss));
+
+      // Merge the stateTransformations again, push the SubBytes under ShiftRows
+      // and InvShiftRows, and cancel out pairs of ShiftRows and InvShiftRows.
+      simplify
+        (addsimps [
+          thm_stateTransformation_composition,
+          thm_SubBytes_ShiftRows,
+          thm_SubBytes_InvShiftRows,
+          thm_ShiftRows_InvShiftRows,
+          thm_InvShiftRows_ShiftRows
+        ] empty_ss);
+
+      // The sequence of AES operations now exactly matches the spec from
+      // cryptol-specs. The solver should be able to verify this quickly with
+      // the operations kept uninterpreted.
+      unint_z3 [
+        "AddRoundKey",
+        "SubBytes",
+        "ShiftRows",
+        "MixColumns",
+        "keyExpansion"
+      ];
+    };
+
+  // Override for fixslice::inv_sub_bytes.
+  inv_sub_bytes_ov <-
+    mir_verify m "aes::soft::fixslice::inv_sub_bytes" [] false
+      (mutate_state_slice_spec {{ Aes::inv_sub_bytes }}) rme;
+
+  // Overrides for fixslice::inv_mix_columns_{0,1,2,3}.
+  inv_mix_columns_ovs <- verify_mix_columns [
+    ("inv_mix_columns_0", {{ Aes::inv_mix_columns_0 }}),
+    ("inv_mix_columns_1", {{ Aes::inv_mix_columns_1 }}),
+    ("inv_mix_columns_2", {{ Aes::inv_mix_columns_2 }}),
+    ("inv_mix_columns_3", {{ Aes::inv_mix_columns_3 }})
+  ];
+
+  // Rewrite rules to interchange SubBytesNots and InvMixColumns{0,1,2,3}.
+  thms_SubBytesNots_InvMixColumnsN <-
+    for [
+      {{ Aes::Spec::InvMixColumns }},
+      {{ Aes::InvMixColumns1 }},
+      {{ Aes::InvMixColumns2 }},
+      {{ Aes::InvMixColumns3 }}
+    ] (\invMixColumns -> do {
+      prove_print z3 {{
+        \(state : Aes::Spec::State) ->
+          Aes::SubBytesNots (invMixColumns state)
+          == invMixColumns (Aes::SubBytesNots state)
+      }};
+    });
+
+  // Rewrite rules to turn addRoundKey' of a non-initial round of keySchedule
+  // into stateTransformation of SubBytesNots of InvShiftRowsN of AddRoundKey of
+  // keyExpansion, with the extra sub_bytes_nots and inv_shift_rows_N from
+  // key_schedule moved inside the stateTransformation.
+  thms_addRoundKey'_n <-
+    for (eval_list {{ [1..Aes::Spec::Nr] : [_][64] }}) (\i -> do {
+      let i' = eval_int i;
+      let equality =
+        if eval_bool {{ (i % 4 == 0) || (i == `Aes::Spec::Nr) }} then {{
+          \(key : Aes::KeyBytes) (blocks : BatchBlockBytes) ->
+            Aes::addRoundKey'
+              (sliceRound`{i'} (KeySchedule::key_schedule key))
+              blocks
+            == Aes::stateTransformation
+                (\state ->
+                  Aes::SubBytesNots
+                    (Aes::Spec::AddRoundKey
+                      (Aes::Spec::keyExpansion (join key) @ i)
+                      state))
+                blocks
+        }} else if eval_bool {{ i % 4 == 1 }} then {{
+          \(key : Aes::KeyBytes) (blocks : BatchBlockBytes) ->
+            Aes::addRoundKey'
+              (sliceRound`{i'} (KeySchedule::key_schedule key))
+              blocks
+            == Aes::stateTransformation
+                (\state ->
+                  Aes::SubBytesNots
+                    (Aes::Spec::InvShiftRows
+                      (Aes::Spec::AddRoundKey
+                        (Aes::Spec::keyExpansion (join key) @ i)
+                        (Aes::Spec::ShiftRows state))))
+              blocks
+        }} else if eval_bool {{ i % 4 == 2 }} then {{
+          \(key : Aes::KeyBytes) (blocks : BatchBlockBytes) ->
+            Aes::addRoundKey'
+              (sliceRound`{i'} (KeySchedule::key_schedule key))
+              blocks
+            == Aes::stateTransformation
+                (\state ->
+                  Aes::SubBytesNots
+                    (Aes::Spec::ShiftRows
+                      (Aes::Spec::ShiftRows
+                        (Aes::Spec::AddRoundKey
+                          (Aes::Spec::keyExpansion (join key) @ i)
+                          (Aes::Spec::InvShiftRows
+                            (Aes::Spec::InvShiftRows state))))))
+                blocks
+        }} else /* i % 4 == 3 */ {{
+          \(key : Aes::KeyBytes) (blocks : BatchBlockBytes) ->
+            Aes::addRoundKey'
+              (sliceRound`{i'} (KeySchedule::key_schedule key))
+              blocks
+            == Aes::stateTransformation
+                (\state ->
+                  Aes::SubBytesNots
+                    (Aes::Spec::ShiftRows
+                      (Aes::Spec::AddRoundKey
+                        (Aes::Spec::keyExpansion (join key) @ i)
+                        (Aes::Spec::InvShiftRows state))))
+                blocks
+        }};
+      prove_print (unint_z3 ["keyExpansion"]) equality;
+    });
+
+  // Rewrite rule to cancel out SubBytesNots of SubBytesNots.
+  thm_SubBytesNots_SubBytesNots <- prove_print z3 {{
+    \(state : Aes::Spec::State) ->
+      Aes::SubBytesNots (Aes::SubBytesNots state) == state
+  }};
+
+  // Rewrite rule to turn three ShiftRows into an InvShiftRows.
+  thm_ShiftRows_ShiftRows_ShiftRows <- prove_print z3 {{
+    \(state : Aes::Spec::State) ->
+      Aes::Spec::ShiftRows (Aes::Spec::ShiftRows (Aes::Spec::ShiftRows state))
+      == Aes::Spec::InvShiftRows state
+  }};
+
+  // Rewrite rule to interchange InvShiftRows and InvSubBytes.
+  thm_InvShiftRows_InvSubBytes <- prove_print z3 {{
+    \(state : Aes::Spec::State) ->
+      Aes::Spec::InvShiftRows (Aes::Spec::InvSubBytes state)
+      == Aes::Spec::InvSubBytes (Aes::Spec::InvShiftRows state)
+  }};
+
+  // Rewrite rule to interchange ShiftRows and InvSubBytes.
+  thm_ShiftRows_InvSubBytes <- prove_print z3 {{
+    \(state : Aes::Spec::State) ->
+      Aes::Spec::ShiftRows (Aes::Spec::InvSubBytes state)
+      == Aes::Spec::InvSubBytes (Aes::Spec::ShiftRows state)
+  }};
+
+  // Spec for aes_verif::decrypt{128,192,256}.
+  let decrypt_spec = do {
+    key <- mir_fresh_cryptol_var "key" {| Aes::KeyBytes |};
+    block <- mir_fresh_cryptol_var "block" {| BlockBytes |};
+    mir_execute_func [mir_term key, mir_term block];
+    mir_return (mir_term {{ Aes::decrypt key block }});
+  };
+
+  mir_verify m (str_concat "aes_verif::decrypt" key_size_str)
+    (concat add_round_key_ovs
+      (concat inv_mix_columns_ovs
+        [
+          key_schedule_ov,
+          bitslice_cipher_ov,
+          inv_bitslice_ov,
+          inv_sub_bytes_ov,
+          shift_rows_2_ov
+        ]))
+    false decrypt_spec
+    do {
+      unfolding [
+        "add_round_key",
+        "inv_sub_bytes",
+        "inv_mix_columns_0",
+        "inv_mix_columns_1",
+        "inv_mix_columns_2",
+        "inv_mix_columns_3",
+        "shift_rows_2",
+        "bitsliced"
+      ];
+
+      // Cancel out the adjacent inv_bitslice and bitslice coming from adjacent
+      // uses of bitsliced, then merge the now adjacent stateTransformations.
+      // Turn addRoundKey' of key_schedule into stateTransformation of
+      // AddRoundKey' of keyExpansion, with some SubBytesNots and InvShiftRowsN
+      // on top, and merge the resulting stateTransformations again. Pull the
+      // SubBytesNots in front of the InvMixColumnsN and then cancel it with the
+      // SubBytesNots from inv_sub_bytes.
+      simplify
+        (addsimp thm_addRoundKey'_0
+          (addsimps thms_addRoundKey'_n
+            (addsimps thms_SubBytesNots_InvMixColumnsN
+              (addsimps [
+                thm_inv_bitslice_bitslice,
+                thm_stateTransformation_composition,
+                thm_SubBytesNots_SubBytesNots
+              ] empty_ss))));
+
+      // Expand the (Inv)ShiftRows from InvMixColumnsN.
+      unfolding ["InvMixColumns1", "InvMixColumns2", "InvMixColumns3"];
+
+      // Pull the InvSubBytes in front of ShiftRows and InvShiftRows, and cancel
+      // out pairs of ShiftRows and InvShiftRows.
+      simplify (addsimps [
+        thm_ShiftRows_InvShiftRows,
+        thm_InvShiftRows_ShiftRows,
+        thm_ShiftRows_ShiftRows_ShiftRows,
+        thm_InvShiftRows_InvSubBytes,
+        thm_ShiftRows_InvSubBytes
+      ] empty_ss);
+
+      // The sequence of AES operations now exactly matches the spec from
+      // cryptol-specs. The solver should be able to verify this quickly with
+      // the operations kept uninterpreted.
+      unint_z3 [
+        "AddRoundKey",
+        "InvSubBytes",
+        "InvShiftRows",
+        "InvMixColumns",
+        "keyExpansion"
+      ];
+    };
+
+};

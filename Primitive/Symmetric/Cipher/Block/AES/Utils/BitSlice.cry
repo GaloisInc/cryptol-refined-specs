@@ -3,7 +3,7 @@ Cryptol specifications for the bitslicing functions in `aes::soft::fixslice` on
 64-bit platforms (`aes/src/soft/fixslice64.rs`), which are independent of the
 key size and do not depend on the AES spec from `cryptol-specs`.
 */
-module Primitive::Symmetric::Cipher::Block::AES::Utils::Bitslice where
+module Primitive::Symmetric::Cipher::Block::AES::Utils::BitSlice where
 
 /**
 A single AES block, as a byte array. Corresponds to `aes::Block`.

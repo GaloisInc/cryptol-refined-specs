@@ -4,7 +4,7 @@ on 64-bit platforms (`aes/soft/fixslice64.rs`).
 */
 module Primitive::Symmetric::Cipher::Block::AES::Instantiations::KeySchedule::KeySchedule192 where
 
-import Primitive::Symmetric::Cipher::Block::AES::Utils::Bitslice
+import Primitive::Symmetric::Cipher::Block::AES::Utils::BitSlice
 import Primitive::Symmetric::Cipher::Block::AES::Instantiations::AES192
 import submodule Spec as Spec
 

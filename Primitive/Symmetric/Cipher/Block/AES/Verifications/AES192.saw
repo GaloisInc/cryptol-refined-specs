@@ -1,0 +1,54 @@
+Aes192 <- cryptol_load "AesVerif/Aes192.cry";
+KeySchedule192 <- cryptol_load "AesVerif/KeySchedule192.cry";
+
+// Spec for fixslice::bitslice, as used in the first call in
+// aes192_key_schedule.
+let bitslice_key_192_front_spec = do {
+  rkeys_init <- mir_fresh_cryptol_var "rkeys_init" {| Aes192::FSRoundKeys |};
+  rkeys_ref <- mir_ref_of_mut (mir_term rkeys_init);
+  key <- mir_fresh_cryptol_var "key" {| Aes192::KeyBytes |};
+  key_ref <- mir_ref_of (mir_term key);
+  mir_execute_func [
+    mir_slice_range_value rkeys_ref 0 8,
+    mir_slice_range_value key_ref 0 16,
+    mir_slice_range_value key_ref 0 16,
+    mir_slice_range_value key_ref 0 16,
+    mir_slice_range_value key_ref 0 16
+  ];
+  mir_points_to rkeys_ref (mir_term {{
+    bitslice [take key, take key, take key, take key] # drop`{8} rkeys_init
+  }});
+};
+
+bitslice_key_192_front_ov <-
+  mir_verify m "aes::soft::fixslice::bitslice" [] false
+    bitslice_key_192_front_spec rme;
+
+// Spec for fixslice::bitslice, as used in the second call in
+// aes192_key_schedule.
+let bitslice_key_192_back_spec = do {
+  tmp_init <- mir_fresh_cryptol_var "tmp_init" {| FSState |};
+  tmp_ref <- mir_ref_of_mut (mir_term tmp_init);
+  key <- mir_fresh_cryptol_var "key" {| Aes192::KeyBytes |};
+  key_ref <- mir_ref_of (mir_term key);
+  mir_execute_func [
+    mir_slice_value tmp_ref,
+    mir_slice_range_value key_ref 8 24,
+    mir_slice_range_value key_ref 8 24,
+    mir_slice_range_value key_ref 8 24,
+    mir_slice_range_value key_ref 8 24
+  ];
+  mir_points_to tmp_ref (mir_term {{
+    bitslice [drop key, drop key, drop key, drop key]
+  }});
+};
+
+bitslice_key_192_back_ov <-
+  mir_verify m "aes::soft::fixslice::bitslice" [] false
+    bitslice_key_192_back_spec rme;
+
+// Verify AES-192. For some reason keeping SBox uninterpreted doesn't work for
+// the aes192_key_schedule proof, so we use regular z3.
+verify_aes_size Aes192 KeySchedule192
+  [bitslice_key_192_front_ov, bitslice_key_192_back_ov]
+  z3;

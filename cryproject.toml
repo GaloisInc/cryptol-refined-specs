@@ -1,0 +1,11 @@
+# Build and cache the collection of gold standard algorithms.
+#
+# Ordering is alphabetical up to the algorithm level.
+# @copyright Galois, Inc.
+# @author Marcella Hastings <marcella@galois.com>
+#
+modules = [
+    # SHA2
+    "Primitive/Keyless/Hash/SHA2/Instantiations/SHA256.cry",
+    "Primitive/Keyless/Hash/SHA2/Instantiations/SHA384.cry",
+]
