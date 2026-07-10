@@ -11,7 +11,7 @@ import Primitive::Keyless::Hash::SHA2::Instantiations::SHA256 as SHA_256
 import Primitive::Keyless::Hash::SHA2::RefinedInstantiations::SHA256 as SHAI_256
 
 import Primitive::Keyless::Hash::SHA2::Instantiations::SHA384 as SHA_384
-import Primitive::Keyless::Hash::SHA2::RefinedInstantiationsl::SHA384 as SHAI_384
+import Primitive::Keyless::Hash::SHA2::RefinedInstantiations::SHA384 as SHAI_384
 
 /**
  * The `internal` version of SHA256 matches the spec-adherent version.
