@@ -1,11 +1,21 @@
 # Build and cache the collection of gold standard algorithms.
 #
-# Ordering is alphabetical up to the algorithm level.
 # @copyright Galois, Inc.
 # @author Marcella Hastings <marcella@galois.com>
 #
 modules = [
+    # AES (cipher)
+    "Primitive/Symmetric/Cipher/Block/AES/Instantiations/AES128.cry",
+    "Primitive/Symmetric/Cipher/Block/AES/Instantiations/AES192.cry",
+    "Primitive/Symmetric/Cipher/Block/AES/Instantiations/AES256.cry",
+
+    # AES (cipher) KeyScheduling
+    Primitive/Symmetric/Cipher/Block/AES/Instantiations/KeySchedule/KeySchedule128.cry
+    Primitive/Symmetric/Cipher/Block/AES/Instantiations/KeySchedule/KeySchedule192.cry
+    Primitive/Symmetric/Cipher/Block/AES/Instantiations/KeySchedule/KeySchedule256.cry
+
     # SHA2
     "Primitive/Keyless/Hash/SHA2/Instantiations/SHA256.cry",
     "Primitive/Keyless/Hash/SHA2/Instantiations/SHA384.cry",
+    "Primitive/Keyless/Hash/SHA2/Instantiations/SHA512.cry",
 ]
