@@ -1,15 +1,15 @@
 /**
-Specification for the AES-128 key schedule function from `aes::soft::bitslice`
+Specification for the AES-192 key schedule function from `aes::soft::bitslice`
 on 64-bit platforms (`aes/soft/fixslice64.rs`).
 */
-module Primitive::Symmetric::Cipher::Block::AES::Instantiations::KeySchedule::KeySchedule128 where
+module Primitive::Symmetric::Cipher::Block::AES::RefinedInstantiations::KeySchedule::KeySchedule192 where
 
 import Primitive::Symmetric::Cipher::Block::AES::Utils::BitSlice
-import Primitive::Symmetric::Cipher::Block::AES::Instantiations::AES128 
+import Primitive::Symmetric::Cipher::Block::AES::RefinedInstantiations::AES192
 import submodule Spec as Spec
 
 /**
-Specification for the `fixslice::aes128_key_schedule` function.
+Specification for the `fixslice::aes192_key_schedule` function.
 */
 key_schedule : KeyBytes -> FSRoundKeys
 key_schedule key =
@@ -23,10 +23,12 @@ key_schedule key =
        , sub_bytes_nots (inv_shift_rows_3 w7 )
        , sub_bytes_nots                   w8
        , sub_bytes_nots (inv_shift_rows_1 w9 )
-       , sub_bytes_nots                   w10
+       , sub_bytes_nots (inv_shift_rows_2 w10)
+       , sub_bytes_nots (inv_shift_rows_3 w11)
+       , sub_bytes_nots                   w12
        ]
   where
-    [w0, w1, w2, w3, w4, w5, w6, w7, w8, w9, w10] =
+    [w0, w1, w2, w3, w4, w5, w6, w7, w8, w9, w10, w11, w12] =
       [ bitslice (repeat (join (transpose rk)))
       | rk <- Spec::keyExpansion (join key)
       ]

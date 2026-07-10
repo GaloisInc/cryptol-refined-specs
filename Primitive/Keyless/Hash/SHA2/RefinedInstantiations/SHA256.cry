@@ -7,7 +7,7 @@
    www.cryptol.net
 */
 
-module Primitive::Keyless::Hash::SHA2::Instantiations::SHA256 = Primitive::Keyless::Hash::SHA2::RefinedSpecification where
+module Primitive::Keyless::Hash::SHA2::RefinedInstantiations::SHA256 = Primitive::Keyless::Hash::SHA2::RefinedSpecification where
 
 type wp = 32
 

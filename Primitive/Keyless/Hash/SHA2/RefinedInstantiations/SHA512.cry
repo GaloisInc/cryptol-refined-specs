@@ -1,7 +1,7 @@
 /**
 Instantiation of `RefinedSpecification` for SHA-512.
 */
-module Primitive::Keyless::Hash::SHA2::Instantiations::SHA512 = Primitive::Keyless::Hash::SHA2::RefinedSpecification where
+module Primitive::Keyless::Hash::SHA2::RefinedInstantiations::SHA512 = Primitive::Keyless::Hash::SHA2::RefinedSpecification where
 
 type wp = 64
 
