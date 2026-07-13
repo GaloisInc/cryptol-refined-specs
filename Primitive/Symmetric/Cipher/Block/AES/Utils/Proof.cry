@@ -4,7 +4,7 @@ SAW script to simplify the proofs.
 */
 module Primitive::Symmetric::Cipher::Block::AES::Utils::Proof where
 
-import Primitive::Symmetric::Cipher::Block::AES::Utils::Bitslice
+import Primitive::Symmetric::Cipher::Block::AES::Utils::BitSlice
 
 /**
 Given a series of round keys in bitsliced format, get the round key for round
