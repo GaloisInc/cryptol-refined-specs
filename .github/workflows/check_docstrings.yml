@@ -8,13 +8,13 @@
 name: Check docstrings
 
 on:
-  # Run on a PR to master
+  # Run on a PR to main
   pull_request:
-    branches: [master]
-  # Run on pushing to master
+    branches: [main]
+  # Run on pushing to main
   push:
-    branches: [master]
-  # Run on master on Sundays
+    branches: [main]
+  # Run on main on Sundays
   schedule: [ cron: '0 17 * * 0' ]
 
 jobs:
@@ -30,8 +30,8 @@ jobs:
       # This is the relative path to the Cryptol cache.
       CRYPTOL_CACHE: ${{ github.workspace }}/.cryproject/loadcache.toml
 
-      # There's one cache for the whole repo. It's associated with the `master` branch.
-      CRYPTOL_CACHE_KEY: cryptol-specs-cache
+      # There's one cache for the whole repo. It's associated with the `main` branch.
+      CRYPTOL_CACHE_KEY: cryptol-refined-specs-cache
 
       # Backup key, if we need to rebuild the cache from scratch on a branch.
       # This is shared among all branches so it's not necessarily reliable.
@@ -91,15 +91,15 @@ jobs:
         timeout-minutes: 355
         continue-on-error: true
 
-      # Caches can only be uploaded once. If we're on master and the cache already exists,
+      # Caches can only be uploaded once. If we're on main and the cache already exists,
       # we need to delete it...
-      - name: "If we're on master, delete the cache"
-        if: github.ref == 'refs/heads/master' && steps.load-cache.outputs.cache-hit == 'true'
+      - name: "If we're on main, delete the cache"
+        if: github.ref == 'refs/heads/main' && steps.load-cache.outputs.cache-hit == 'true'
         run: gh cache delete ${{ env.CRYPTOL_CACHE_KEY }}
 
       # ...before we upload it. Do this regardless of whether it previously existed.
       - id: save-cache
-        if: github.ref == 'refs/heads/master'
+        if: github.ref == 'refs/heads/main'
         uses: actions/cache/save@v5
         with:
           path: ${{ env.CRYPTOL_CACHE }}

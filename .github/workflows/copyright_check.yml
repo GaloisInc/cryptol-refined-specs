@@ -3,12 +3,11 @@
 # @copyright Galois, Inc
 # @author Marcella Hastings <marcella@galois.com>
 #
-
 name: Copyright check
 on:
   pull_request:
     branches:
-      - master
+      - main
 
 jobs:
   copyright-check:
