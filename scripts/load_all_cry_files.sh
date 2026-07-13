@@ -28,7 +28,10 @@ load_cry_files() {
     done
 }
 
-load_cry_files "."
+echo "=== Checking Files in Common/ ==="
+load_cry_files "Common/"
+echo "=== Checking Files in Primitive/ ==="
+load_cry_files "Primitive/"
 
 rm $SCRIPT
 

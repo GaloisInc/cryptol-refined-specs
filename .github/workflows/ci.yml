@@ -19,5 +19,17 @@ jobs:
     - name: Cryptol Version
       run: cryptol --version
 
+    - name: Checkout Cryptol Specs
+      uses: actions/checkout@v3
+      with:
+          repository: GaloisInc/cryptol-specs
+          path: cryptol-specs/
+
+    - name: Setup Enviornment
+      run: echo "CRYPTOLPATH=.:cryptol-specs" >> $GITHUB_ENV
+
+    - name: Test
+      run: ls && echo $CRYPTOLPATH
+
     - name: Check Cryptol Files
       run: bash scripts/load_all_cry_files.sh
