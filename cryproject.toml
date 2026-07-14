@@ -5,17 +5,20 @@
 #
 modules = [
     # AES (cipher)
-    "Primitive/Symmetric/Cipher/Block/AES/Instantiations/AES128.cry",
-    "Primitive/Symmetric/Cipher/Block/AES/Instantiations/AES192.cry",
-    "Primitive/Symmetric/Cipher/Block/AES/Instantiations/AES256.cry",
+    "Primitive/Symmetric/Cipher/Block/AES/RefinedInstantiations/AES128.cry",
+    "Primitive/Symmetric/Cipher/Block/AES/RefinedInstantiations/AES192.cry",
+    "Primitive/Symmetric/Cipher/Block/AES/RefinedInstantiations/AES256.cry",
 
     # AES (cipher) KeyScheduling
-    Primitive/Symmetric/Cipher/Block/AES/Instantiations/KeySchedule/KeySchedule128.cry
-    Primitive/Symmetric/Cipher/Block/AES/Instantiations/KeySchedule/KeySchedule192.cry
-    Primitive/Symmetric/Cipher/Block/AES/Instantiations/KeySchedule/KeySchedule256.cry
+    "Primitive/Symmetric/Cipher/Block/AES/RefinedInstantiations/KeySchedule/KeySchedule128.cry",
+    "Primitive/Symmetric/Cipher/Block/AES/RefinedInstantiations/KeySchedule/KeySchedule192.cry",
+    "Primitive/Symmetric/Cipher/Block/AES/RefinedInstantiations/KeySchedule/KeySchedule256.cry",
+
+    # AES (cipher) Equivalence with cryptol-specs
+    "Primitive/Keyless/Hash/SHA2/Verifications/Equivalence.cry",
 
     # SHA2
-    "Primitive/Keyless/Hash/SHA2/Instantiations/SHA256.cry",
-    "Primitive/Keyless/Hash/SHA2/Instantiations/SHA384.cry",
-    "Primitive/Keyless/Hash/SHA2/Instantiations/SHA512.cry",
+    "Primitive/Keyless/Hash/SHA2/RefinedInstantiations/SHA256.cry",
+    "Primitive/Keyless/Hash/SHA2/RefinedInstantiations/SHA384.cry",
+    "Primitive/Keyless/Hash/SHA2/RefinedInstantiations/SHA512.cry",
 ]
