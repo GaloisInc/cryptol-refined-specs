@@ -76,6 +76,15 @@ jobs:
           path: ${{ env.CRYPTOL_CACHE }}
           key: ${{ env.BRANCH_CACHE_KEY }}
 
+      - name: Checkout Cryptol Specs
+        uses: actions/checkout@v3
+        with:
+            repository: GaloisInc/cryptol-specs
+            path: cryptol-specs/
+
+      - name: Setup Enviornment
+        run: echo "CRYPTOLPATH=.:cryptol-specs" >> $GITHUB_ENV
+
       # Run the check-docstrings script, regardless of cache load.
       - name: "Run the check-docstrings script."
         id: checkscript
