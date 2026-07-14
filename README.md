@@ -17,8 +17,8 @@ This repo includes several general purpose, quantum-resistant algorithms approve
 
 | Primitive | Specification | Parameters |
 | --- | --- | --- |
-| Block cipher | [AES](Primitive/Symmetric/Cipher/Block/AES/RefinedSpecification.cry) | [AES128](Primitive/Symmetric/Cipher/Block/AES/Instantiations/AES128.cry), [AES256](Primitive/Symmetric/Cipher/Block/AES/Instantiations/AES256.cry), [AES512](Primitive/Symmetric/Cipher/Block/Modes/Instantiations/AES512.cry) |
-| Hashing | [SHA2](Primitive/Keyless/Hash/SHA2/RefinedSpecification.cry) | [SHA-256](Primitive/Keyless/Hash/SHA2/Instantiations/SHA256.cry), [SHA-384](Primitive/Keyless/Hash/SHA2/Instantiations/SHA384.cry), [SHA-512](Primitive/Keyless/Hash/SHA2/Instantiations/SHA512.cry) |
+| Block cipher | [AES](Primitive/Symmetric/Cipher/Block/AES/RefinedSpecification.cry) | [AES128](Primitive/Symmetric/Cipher/Block/AES/RefinedInstantiations/AES128.cry), [AES256](Primitive/Symmetric/Cipher/Block/AES/RefinedInstantiations/AES256.cry), [AES512](Primitive/Symmetric/Cipher/Block/Modes/RefinedInstantiations/AES512.cry) |
+| Hashing | [SHA2](Primitive/Keyless/Hash/SHA2/RefinedSpecification.cry) | [SHA-256](Primitive/Keyless/Hash/SHA2/RefinedInstantiations/SHA256.cry), [SHA-384](Primitive/Keyless/Hash/SHA2/RefinedInstantiations/SHA384.cry), [SHA-512](Primitive/Keyless/Hash/SHA2/RefinedInstantiations/SHA512.cry) |
 
 # Contributing
 
